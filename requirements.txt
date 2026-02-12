@@ -1,17 +1,40 @@
-python3.10
-pandas
-matplotlib
-numpy
-openpyxl
-python-dotenv
-db-dtypes
+# Librerías científicas
+numpy == 1.26.4
+pandas == 2.1.4
+scipy == 1.11.4
+
+# Librerías para visualización
+matplotlib == 3.7.5
+seaborn == 0.13.2
+
+# Utilidades
+openpyxl == 3.1.5
 jupyter
 notebook
 ipykernel
-seaborn
 ipywidgets
-scikit-learn
-xgboost
+
+
+# Machine Learning
+scikit-learn == 1.4.2
+xgboost == 3.2.0
+catboost == 1.2.8
+lightgbm == 4.6.0
+optuna == 4.7.0
+
+
+# Serialización
+joblib == 1.3.2
 pydantic
-fastapi
+
+# Despliegue y API
+streamlit == 1.54.0
+fastapi == 0.129.0
 uvicorn[standard]
+python-dotenv
+db-dtypes
+
+
+# MLOps y AutoML
+mlflow == 3.9.0
+pycaret == 3.3.2
