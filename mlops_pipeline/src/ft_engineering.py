@@ -1,26 +1,32 @@
 # feature_engineering.py: funciones para carga, limpieza, FE y preprocesamiento de datos.
 
 # Librerías básicas
+import re
 import numpy as np
 import pandas as pd
-import re
-from cargar_datos import cargar_datos
 import warnings
-from typing import Optional, Tuple, Dict, Any
+from datetime import date
+from typing import Optional, Tuple, Dict, Any, List
+try:
+    from .cargar_datos import cargar_datos
+except ImportError:
+    from cargar_datos import cargar_datos
 
 # Sklearn
 from sklearn.compose import ColumnTransformer
+from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.pipeline import Pipeline
 from sklearn.impute import SimpleImputer
 from sklearn.preprocessing import FunctionTransformer, OneHotEncoder, RobustScaler, OrdinalEncoder
 from sklearn.model_selection import train_test_split
 
+#-----------------------------------------------------
 # 1. Cargar datos y renombrar columnas a snake_case
-def load_and_rename_data(verbose: bool = False) -> pd.DataFrame:
-    """Carga los datos usando cargar_datos() y renombra columnas a snake_case."""
+#-----------------------------------------------------
+df = cargar_datos(verbose=True).copy()
 
-    df = cargar_datos()
-    df = df.copy()
+def rename_cols(verbose: bool = False) -> pd.DataFrame:
+    """Renombra columnas a snake_case."""
 
     # Renombrar columnas a snake_case
     df.columns = [
@@ -38,174 +44,108 @@ def load_and_rename_data(verbose: bool = False) -> pd.DataFrame:
 
     return df
 
-
-# 2. Evaluación de calidad de datos.
-def evaluate_data_quality(
-    df: pd.DataFrame,
-    umbral_nulos: float = 30.0,
-    verbose: bool = True,
-    check_mixed_types: bool = True,
-    sample_size: int = 50_000,
-    random_state: int = 42
-) -> Dict[str, pd.DataFrame]:
-    """
-    Evalúa calidad del dataset:
-      - nulos (conteo y %)
-      - columnas que superan un umbral de nulos
-      - dtypes de pandas
-      - columnas con tipos internos mezclados (opcional; puede ser costoso)
-
-    Retorna un dict con dataframes de resultados.
-    """
-    df = df.copy()
-
-    # Valores nulos y porcentaje
-    missing_count = df.isna().sum()
-    missing_pct = (df.isna().mean() * 100).round(2)
-
-    missing_df = (
-        pd.DataFrame({"faltantes": missing_count, "%": missing_pct})
-        .sort_values("%", ascending=False)
-    )
-
-    cols_missing_umbral = missing_df[missing_df["%"] > umbral_nulos]
-
-    # Tipos pandas
-    tipos_df = df.dtypes.astype(str).to_frame("dtype").sort_values("dtype")
-
-    def tipos_internos(df_: pd.DataFrame) -> pd.DataFrame:
-        rows = []
-        for col in df_.columns:
-            s = df_[col].dropna()
-            if s.empty:
-                continue
-            if len(s) > sample_size:
-                s = s.sample(sample_size, random_state=random_state)
-            tipos = s.map(type).value_counts()
-            if len(tipos) > 1:
-                rows.append({
-                    "columna": col,
-                    "dtype_pandas": str(df_[col].dtype),
-                    "tipos_internos": {t.__name__: int(n) for t, n in tipos.items()}
-                })
-        return pd.DataFrame(rows)
-
-    mix = tipos_internos(df) if check_mixed_types else pd.DataFrame()
-
-    if verbose:
-        if not cols_missing_umbral.empty:
-            print(f"\nColumnas con más del {umbral_nulos}% de nulos:")
-            print(cols_missing_umbral)
-        else:
-            print(f"\nNo hay columnas con más del {umbral_nulos}% de nulos.")
-
-        print("\nColumnas con tipos internos mezclados:")
-        print("No se detectaron columnas con tipos mezclados." if mix.empty else mix)
-
-    return {
-        "missing": missing_df,
-        "cols_muchos_nulos": cols_missing_umbral,
-        "tipos": tipos_df,
-        "mix_types": mix
-    }
-
-# 3. Ordenar por fecha_prestamo (ascendente).
-def temporal_order(df: pd.DataFrame, date_col: str = "fecha_prestamo") -> pd.DataFrame:
-    """Ordena el dataset por fecha y asegura tipo datetime en la columna temporal."""
-    df = df.copy()
-
-    if date_col not in df.columns:
-        raise KeyError(f"No existe la columna '{date_col}' en el DataFrame.")
-
-    df[date_col] = pd.to_datetime(df[date_col], errors="coerce")
-    df = df.dropna(subset=[date_col]).copy()
-
-    # ordenar y dejar índice limpio (evita desalineación)
-    df = df.sort_values(date_col).reset_index(drop=True)
-
-    # check
-    if not pd.api.types.is_datetime64_any_dtype(df[date_col]):
-        raise TypeError("La columna temporal no quedó en datetime.")
-
-    return df
-
-# 4. Separación entre features y target
+#-----------------------------------------------------
+# 2. Separación entre features y target
+#-----------------------------------------------------
 def split_features_target(df: pd.DataFrame, target: str) -> Tuple[pd.DataFrame, pd.Series]:
     """Separa features (X) y variable objetivo (y) con validaciones básicas."""
-    if not isinstance(target, str):
-        raise TypeError("target debe ser str (nombre de columna).")
-
+    
     if target not in df.columns:
         raise ValueError(f"Target '{target}' no existe. Columnas: {list(df.columns)}")
-
+   
     y = df[target]
     X = df.drop(columns=[target])
     return X, y
 
-# 5. Feature Engineering helpers: 
-def build_fe(
-    X: pd.DataFrame,
-    drop_cols: Optional[list] = None
+#-----------------------------------------------------
+# 3. Filtro de fecha: se utilizan los datos hasta hoy (14/02/2026) para entrenar y el dataset completo se utilizara en producción.
+#-----------------------------------------------------
+def filter_future_data(
+    df: pd.DataFrame,
+    date_col: str = "fecha_prestamo",
+    cutoff_date: Optional[str] = "2025-12-31",  # fijo y reproducible
+    verbose: bool = True
 ) -> pd.DataFrame:
+    """
+    Filtra el dataset dejando solo registros con fecha <= cutoff_date.
+    - cutoff_date: "YYYY-MM-DD" 
+      Si es None, usa la fecha de hoy real (date.today()).
+    """
+    if date_col not in df.columns:
+        if verbose:
+            print(f"[WARNING] No existe '{date_col}'. No se filtran datos futuros.")
+        return df
+
+    df = df.copy()
+    df[date_col] = pd.to_datetime(df[date_col], errors="coerce")
+
+    cutoff = pd.to_datetime(cutoff_date) if cutoff_date is not None else pd.to_datetime(date.today())
+
+    before = len(df)
+    df = df[df[date_col].notna() & (df[date_col] <= cutoff)].copy()
+    after = len(df)
+
+    if verbose:
+        print("\n[FILTRO FUTURO]")
+        print(f"Cutoff: {cutoff.date()}")
+        print(f"Antes: {before} | Después: {after} | Removidas: {before - after}")
+        if after > 0:
+            print(f"Rango fechas final: {df[date_col].min()} → {df[date_col].max()}")
+
+    return df
+
+#-----------------------------------------------------
+# 4. Feature Engineering
+#-----------------------------------------------------
+def make_features(X: pd.DataFrame, drop_cols: Optional[List[str]] = None) -> pd.DataFrame:
     """Aplica limpieza y feature engineering sobre el conjunto de entrada."""
     X = X.copy()
 
-    # Drop columns (ej: puntaje)
+    # Drop columnas para excluir columnas (ej: puntaje)
     if drop_cols:
         X = X.drop(columns=[c for c in drop_cols if c in X.columns], errors="ignore")
 
-    #  FE de fecha 
+    # Fecha: crear features y borrar fecha original (evita leakage por timestamp directo)
     date_col = "fecha_prestamo"
-    dt = None
 
-    # Caso 1: fecha como columna
     if date_col in X.columns:
-        X[date_col] = pd.to_datetime(X[date_col], errors="coerce")
-        dt = X[date_col]
+        dt = pd.to_datetime(X[date_col], errors="coerce")
+        
+        if dt.notna().any():
+            X[f"{date_col}_anio"] = dt.dt.year
+            X[f"{date_col}_mes"] = dt.dt.month
+            X[f"{date_col}_dia"] = dt.dt.day
+            X[f"{date_col}_dow"] = dt.dt.dayofweek
+            X[f"{date_col}_q"] = dt.dt.quarter
 
-    # Caso 2: fecha como índice datetime
-    elif isinstance(X.index, pd.DatetimeIndex):
-        # convertir a serie datetime alineada a X
-        dt = pd.to_datetime(pd.Series(X.index, index=X.index), errors="coerce")
-
-    # Crear features si dt existe (y no es todo NaT)
-    if dt is not None and dt.notna().any():
-        X[f"{date_col}_anio"] = dt.dt.year.astype("Int64")
-        X[f"{date_col}_mes"]  = dt.dt.month.astype("Int64")
-        X[f"{date_col}_dia"]  = dt.dt.day.astype("Int64")
-        X[f"{date_col}_dow"]  = dt.dt.dayofweek.astype("Int64")
-
-        # Dropear fecha original si era columna
-        if date_col in X.columns:
-            X = X.drop(columns=[date_col], errors="ignore")
-
-        # Si venía como índice datetime, limpiar índice
-        if isinstance(X.index, pd.DatetimeIndex):
-            X = X.reset_index(drop=True)
+        X = X.drop(columns=[date_col], errors="ignore")
 
 
-    # Limpieza edad 
-    col_age = "edad_cliente"
-    if col_age in X.columns:
-        X[col_age] = pd.to_numeric(X[col_age], errors="coerce")
-        X.loc[(X[col_age] < 18) | (X[col_age] > 100), col_age] = np.nan
+    # Limpieza edad: invalida outliers imposibles
+    if "edad_cliente" in X.columns:
+        age = pd.to_numeric(X["edad_cliente"], errors="coerce")
+        age = age.where((age >= 18) & (age <= 100), np.nan)
+        X["edad_cliente"] = age
+    
+    # Limpieza de puntajes negativos
+    for c in ["puntaje", "puntaje_datacredito"]:
+        if c in X.columns:
+            s = pd.to_numeric(X[c], errors="coerce")
+            X[c] = s.where(s >= 0, np.nan)
 
-    # Limpieza numéricos "puros" dentro de categóricas 
-    def clean_numeric_in_categorical(df_: pd.DataFrame, col: str, numeric_regex: str = r"-?\d+(\.\d+)?"):
-        if col not in df_.columns:
-            return df_
-        s = df_[col].astype("string").str.strip()
-        mask_numeric = s.str.fullmatch(numeric_regex).fillna(False)
-        df_.loc[mask_numeric, col] = np.nan
-        return df_
-
-    for c in [ "tendencia_ingresos", "tipo_laboral"]:
-        X = clean_numeric_in_categorical(X, c)
+    # Limpieza de numéricos dentro de categóricas 
+    def _nan_if_numeric_string(s: pd.Series) -> pd.Series:
+        s = s.astype("string").str.strip()
+        mask_num = s.str.fullmatch(r"-?\d+(\.\d+)?").fillna(False)
+        s = s.mask(mask_num, other=np.nan)
+        return s
+    
+    for c in ["tendencia_ingresos", "tipo_laboral"]:
+        if c in X.columns:
+            X[c] = _nan_if_numeric_string(X[c])
     
     # Normalización de categóricas: strip + espacios + minúsculas
-    cat_norm_cols = ["tendencia_ingresos", "tipo_laboral"]
-
-    for c in cat_norm_cols:
+    for c in ["tendencia_ingresos", "tipo_laboral"]:
         if c in X.columns:
             X[c] = (
                 X[c]
@@ -215,117 +155,99 @@ def build_fe(
                 .str.lower()
             )
 
-    # EDA-based FE
-    def to_num(s: pd.Series) -> pd.Series:
-        return pd.to_numeric(s, errors="coerce")
+    # Forzar códigos numéricos a categórica (OHE)
+    if "tipo_credito" in X.columns:
+        tc = pd.to_numeric(X["tipo_credito"], errors="coerce")
 
-    # Saldos: NaN -> 0 (si no hay info, se asume que no tiene saldo)
-    saldo_cols = ["saldo_mora", "saldo_total", "saldo_principal", "saldo_mora_codeudor"]
-    for c in saldo_cols:
-        if c in X.columns:
-            X[c] = to_num(X[c]).fillna(0)
+        # si hay valores inválidos -> NaN
+        # pasar a string categórica
+        X["tipo_credito"] = tc.astype("Int64").astype("string")
 
-    # Flags
-    if "saldo_mora" in X.columns:
-        mora = X["saldo_mora"]
-        X["tiene_mora"] = (mora != 0).astype("Int64")
-        X["mora_pos"]   = (mora > 0).astype("Int64")
-        X["mora_neg"]   = (mora < 0).astype("Int64")
-
-    if "saldo_total" in X.columns:
-        st = X["saldo_total"]
-        X["tiene_saldo"] = (st != 0).astype("Int64")
-        X["saldo_pos"]   = (st > 0).astype("Int64")
-        X["saldo_neg"]   = (st < 0).astype("Int64")
-
-    if "saldo_mora_codeudor" in X.columns:
-        mc = X["saldo_mora_codeudor"]
-        X["tiene_mora_codeudor"] = (mc != 0).astype("Int64")
-        X["mora_codeudor_pos"]   = (mc > 0).astype("Int64")
-        X["mora_codeudor_neg"]   = (mc < 0).astype("Int64")
-
-    # Ratios (evitar división por 0)
-    if "salario_cliente" in X.columns:
-        salario = to_num(X["salario_cliente"])
-        salario_safe = salario.replace(0, np.nan)
-
-        if "cuota_pactada" in X.columns:
-            cuota = to_num(X["cuota_pactada"])
-            X["ratio_cuota_salario"] = (cuota / salario_safe).astype(float)
-
-        if "saldo_total" in X.columns:
-            saldo_total = to_num(X["saldo_total"])
-            X["ratio_saldo_salario"] = (saldo_total / salario_safe).astype(float)
-
-    #  Fix types 
-    int_cols = [
-        "plazo_meses", "edad_cliente", "cuota_pactada", "cant_creditosvigentes",
-        "huella_consulta", "creditos_sector_financiero", "creditos_sector_cooperativo",
-        "creditos_sector_real",
-        "fecha_prestamo_anio", "fecha_prestamo_mes", "fecha_prestamo_dia", "fecha_prestamo_dow",
-        "tiene_mora", "mora_pos", "mora_neg",
-        "tiene_saldo", "saldo_pos", "saldo_neg",
-        "tiene_mora_codeudor", "mora_codeudor_pos", "mora_codeudor_neg",
-    ]
-
-    float_cols = [
-        "capital_prestado", "salario_cliente", "total_otros_prestamos", "puntaje",
-        "puntaje_datacredito", "saldo_mora", "saldo_total", "saldo_principal",
-        "saldo_mora_codeudor", "promedio_ingresos_datacredito",
-        "ratio_cuota_salario", "ratio_saldo_salario",
-    ]
-
-    cat_cols = ["tipo_credito", "tendencia_ingresos", "tipo_laboral"]
-
-    for c in int_cols:
-        if c in X.columns:
-            X[c] = pd.to_numeric(X[c], errors="coerce").astype("Int64")
+        # Agrupar categorías raras (solo 4 y 9 explícitas; el resto OTROS)
+        X["tipo_credito"] = X["tipo_credito"].where(X["tipo_credito"].isin(["4", "9"]), "OTROS")
 
 
-    for c in float_cols:
-        if c in X.columns:
-            X[c] = pd.to_numeric(X[c], errors="coerce").astype(float)
+    # Pasar columnas "string" a object para que np.nan sea el missing real
+    for c in X.columns:
+        if pd.api.types.is_string_dtype(X[c].dtype):
+            X[c] = X[c].astype(object)
 
-    for c in cat_cols:
-        if c in X.columns:
-            # 1) pd.NA -> np.nan (para que sklearn no explote)
-            X[c] = X[c].astype("object")
-            X[c] = X[c].where(pd.notnull(X[c]), np.nan)
+    # Reemplazar cualquier NA pandas por np.nan
+    X = X.where(pd.notna(X), np.nan)
 
-            # 2) ahora sí: category
-            X[c] = X[c].astype("category")
-
-    X = X.convert_dtypes()
-    X = X.replace({pd.NA: np.nan, None: np.nan})
     return X
 
-# 7. Preprocesamiento
-def build_preprocessor():
+#-----------------------------------------------------
+# 4. Transformer: QuantileCapper (aprende caps en TRAIN)
+#-----------------------------------------------------
+heavy_tail_cols = [
+    "salario_cliente",
+    "total_otros_prestamos",
+    "capital_prestado",
+    "cuota_pactada",
+    "saldo_total",
+    "saldo_principal",
+    "saldo_mora",
+    "saldo_mora_codeudor",
+    "promedio_ingresos_datacredito"]
+
+class QuantileCapper(BaseEstimator, TransformerMixin):
+    """Clip por cuantiles aprendido en TRAIN y aplicado igual en TEST/NEW."""
+    def __init__(self, cols=None, low_q=0.01, high_q=0.99):
+        self.cols = cols
+        self.low_q = low_q
+        self.high_q = high_q
+
+    def fit(self, X, y=None):
+        X = X.copy()
+        cols = self.cols or X.select_dtypes(include="number").columns
+
+        self.caps_ = {}
+        for c in cols:
+            s = pd.to_numeric(X[c], errors="coerce").dropna()
+            if s.empty:
+                continue
+            lo, hi = s.quantile([self.low_q, self.high_q])
+            if lo < hi:
+                self.caps_[c] = (float(lo), float(hi))
+        return self
+
+    def transform(self, X):
+        X = X.copy()
+        for c, (lo, hi) in self.caps_.items():
+            if c in X.columns:
+                X[c] = pd.to_numeric(X[c], errors="coerce").clip(lo, hi)
+        return X
+    
+#-----------------------------------------------------
+# 4. Preprocesador: num + ord + cat
+#-----------------------------------------------------
+ # Selectores (se ejecutan en runtime con el X que entra al pipeline)
+def num_cols(X):
+    return X.select_dtypes(include=["number"]).columns.tolist()
+
+def ord_cols(X):
+    return [c for c in ["tendencia_ingresos"] if c in X.columns]
+
+def cat_cols(X):
+    cols = X.select_dtypes(include=["object", "category", "bool"]).columns.tolist()
+    return [c for c in cols if c != "tendencia_ingresos"]
+
+def build_preprocessor() -> ColumnTransformer:
     """Define el preprocesador por tipo de variable (numérica, ordinal y categórica)."""
-
-    # Selectores (se ejecutan en runtime con el X que entra al pipeline)
-    def num_cols(X):
-        return X.select_dtypes(include=["number"]).columns.tolist()
-
-    def ord_cols(X):
-        return [c for c in ["tendencia_ingresos"] if c in X.columns]
-
-    def cat_cols(X):
-        cols = X.select_dtypes(include=["object", "category", "bool"]).columns.tolist()
-        return [c for c in cols if c != "tendencia_ingresos"]
 
     # Orden de 'tendencia_ingresos' 
     ord_order = [["decreciente", "estable", "creciente", "desconocido"]]
 
     #  Pipeline numéricos a imputar con median.
     num_pipe =  Pipeline(steps=[
-                ("imputer", SimpleImputer(missing_values=np.nan,strategy="median")),
+                ("imputer", SimpleImputer(strategy="median")),
                 ("scaler", RobustScaler())
             ])
             
     # Pipeline categóricos ordinales (tendencia_ingresos) con OrdinalEncoder.
     ord_pipe = Pipeline(steps=[
-        ("imputer", SimpleImputer(missing_values=np.nan,strategy="constant", fill_value="desconocido")),
+        ("imputer", SimpleImputer(strategy="constant", fill_value="desconocido")),
         ("ord", OrdinalEncoder(
             categories=ord_order,
             handle_unknown="use_encoded_value",
@@ -335,8 +257,8 @@ def build_preprocessor():
     
     # Pipeline categóricos a imputar con most_frequent y OneHotEncoder.
     cat_pipe = Pipeline(steps=[
-                ("imputer", SimpleImputer(missing_values=np.nan, strategy="most_frequent")),
-                ("ohe", OneHotEncoder(handle_unknown="ignore", sparse_output=False))
+                ("imputer", SimpleImputer(strategy="most_frequent")),
+                ("ohe", OneHotEncoder(drop='first',handle_unknown="ignore", sparse_output=False))
             ])
     
 
@@ -350,27 +272,46 @@ def build_preprocessor():
         remainder="drop",
         verbose_feature_names_out=False
         )
+    
     return preprocessor
 
-# 8. Pipeline completo: FE + Preprocess
-def build_data_pipeline(drop_cols: Optional[list] = None) -> Pipeline:
-    """Crea pipeline completo de FE y preprocesamiento."""
+#-----------------------------------------------------
+# 5. Pipeline completo: FE + Preprocess
+#-----------------------------------------------------
+def build_data_pipeline(
+        drop_cols: Optional[List[str]] = None,
+        cap_cols: Optional[List[str]] = None,
+        low_q: float = 0.01,
+        high_q: float = 0.99
+    ) -> Pipeline:
+    """Crea pipeline completo de FE, CAP y preprocesamiento."""
+    
     fe = FunctionTransformer(
-        build_fe,
+        make_features,
         validate=False,
-        kw_args={"drop_cols": drop_cols or []}
+        kw_args={"drop_cols": ([] if drop_cols is None else list(drop_cols))}
     )
+
+    capper = QuantileCapper(
+        cols=(cap_cols if cap_cols is not None else heavy_tail_cols),
+        low_q=low_q,
+        high_q=high_q,
+   )
+
     return Pipeline(steps=[
         ("fe", fe),
+        ("cap", capper),
         ("pre", build_preprocessor()),
     ])
 
-# 9. Train/test split random/temporal
+#-----------------------------------------------------
+# 6. Split train/test random/temporal
+#-----------------------------------------------------
 def split_data(
     X: pd.DataFrame,
     y: pd.Series,
     test_size: float = 0.2,
-    split_type: str = "random",   # "random" | "temporal"
+    split_type: str = "temporal",   # "random" | "temporal"
     random_state: int = 42,
     stratify: bool = True,
     verbose: bool = True,
@@ -424,7 +365,8 @@ def split_data(
             stratify=y if stratify else None
         )
 
-    if split_type == "temporal":
+    if split_type == "temporal" and verbose:
+        print("temporal split: random_state y stratify se ignoran (split por fecha, sin mezclar pasado/futuro).")
         # Temporal: NO stratify
         if date_col not in X.columns:
             raise KeyError(f"Para split temporal, X debe tener la columna '{date_col}'.")
@@ -434,6 +376,7 @@ def split_data(
 
         X_[date_col] = pd.to_datetime(X_[date_col], errors="coerce")
         mask = X_[date_col].notna()
+
         X_ = X_.loc[mask].copy()
         y_ = y_.loc[mask].copy()
 
@@ -455,64 +398,64 @@ def split_data(
     raise ValueError("split_type debe ser 'random' o 'temporal'")
 
 
-# 10. Función que construye el pipeline completo.
-def run_feature_pipeline(
+#-----------------------------------------------------
+# 7. Función que construye el pipeline completo.
+#-----------------------------------------------------
+def ft_pipeline(
     target: str = "pago_atiempo",
     test_size: float = 0.2,
-    split_type: str = "random",   # "random" | "temporal"
+    split_type: str = "temporal",   # "random" | "temporal"
     random_state: int = 42,
     stratify: bool = True,
     drop_cols: Optional[list] = None,
-    run_quality: bool = False,
-    umbral_nulos: float = 30.0,
     verbose: bool = True
 ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.Series, pd.Series, Dict[str, Any]]:
     """
     Ejecuta el flujo completo de feature engineering + preprocesamiento:
     1) Carga y renombra columnas
-    2) (Opcional) reporte de calidad
-    3) (Opcional) set de índice temporal si split_type="temporal"
-    4) Split X/y
-    5) Split train/test (random o temporal)
-    6) Fit/transform del pipeline SOLO en train (evita leakage)
-    7) Devuelve X_train/X_test ya preprocesados como DataFrames con nombres de features
+    2) Cutoff de fechas
+    3) Split X/y
+    4) Split train/test (random o temporal)
+    5) Fit/transform del pipeline SOLO en train (evita leakage)
+    6) Devuelve X_train/X_test ya preprocesados como DataFrames con nombres de features
     """
 
     if verbose:
-        print("\n[1/7] Cargando y renombrando dataset...")
+        print("\n" + "=" * 60)
+        print("INICIO PIPELINE: FEATURE ENGINEERING + PREPROCESS")
+        print("=" * 60)
 
-    df = load_and_rename_data(verbose=False)
+    # 1) Carga y renombre de columnas
+    df = cargar_datos(verbose=True).copy()
+    df = rename_cols(verbose=verbose)
+     
+    # 2) Cutoff de fechas (usa default "2026-02-14" definido en filter_future_data)
+    df = filter_future_data(df, date_col="fecha_prestamo", verbose=verbose)
 
     if verbose:
-        print(f"      Shape inicial: {df.shape}")
-        print(f"      Columnas: {len(df.columns)}")
+        print("\n[1/7] Carga de datos + renombrado a snake_case")
+        print(f"Shape inicial : {df.shape[0]} filas x {df.shape[1]} columnas")
 
-    quality_report = None
-    if run_quality:
-        quality_report = evaluate_data_quality(df, umbral_nulos=umbral_nulos, verbose=verbose)
-
-    # ---------
-    # Garantizar que fecha sea datetime para ordenar si temporal.
-    # ---------
-    
+    # (siempre) en temporal no hay stratify
     if split_type == "temporal":
-        if "fecha_prestamo" not in df.columns:
-            raise KeyError("No existe 'fecha_prestamo' para split temporal.")
-        df["fecha_prestamo"] = pd.to_datetime(df["fecha_prestamo"], errors="coerce")
-        df = df.dropna(subset=["fecha_prestamo"]).sort_values("fecha_prestamo").reset_index(drop=True)
-
-        # En temporal, stratify no aplica
         stratify = False
+        if verbose: 
+            print("\n[2/7] Split temporal (stratify desactivado)")
+            if "fecha_prestamo" in df.columns:
+                fp = pd.to_datetime(df["fecha_prestamo"], errors="coerce")
+                print(f"Columna temporal: fecha_prestamo")
+                print(f"Rango fechas: {fp.min()}  →  {fp.max()}")
+            else:
+                print("WARNING: no existe 'fecha_prestamo' en df (split temporal fallará)")
 
-    # Split X/y (desde el MISMO df ya ordenado si temporal)
-    if verbose:
-        print("\n[2/7] Separando features y target...")
-        print(f"      Target: {target}")
-
+    # 3) Split X/y (desde el MISMO df ya ordenado si temporal)
     X, y = split_features_target(df, target=target)
+    if verbose:
+        print("\n[3/7] Separación features (X) y target (y)")
+        print(f"      Target: '{target}'")
+        print(f"      X shape: {X.shape} | y shape: {y.shape}")
 
-
-    # Split train/test
+    # 4) Split train/test
     X_train, X_test, y_train, y_test = split_data(
         X, y,
         test_size=test_size,
@@ -522,22 +465,27 @@ def run_feature_pipeline(
         verbose=verbose
     )
     if verbose:
-        print("\n[3/7] División train/test completada")
-        print(f"      Train shape: {X_train.shape}")
-        print(f"      Test shape : {X_test.shape}")
-        print("\nDistribución de clases:")
-        print("      Train:", y_train.value_counts(normalize=True).round(3).to_dict())
-        print("      Test :", y_test.value_counts(normalize=True).round(3).to_dict())
+        print("\n[4/7] Split train/test")
+        print(f"      Tipo split : {split_type}")
+        print(f"      test_size  : {test_size}")
 
-    # ---------
-    # FE (aplicarlo en train y test)
-    # ---------
-    X_train = build_fe(X_train, drop_cols=drop_cols or [])
-    X_test  = build_fe(X_test,  drop_cols=drop_cols or [])
+        if split_type == "random":
+            print(f"      stratify   : {bool(stratify)}")
+            print(f"      seed       : {random_state}")
 
-    if verbose:
-        print("\n[4/7] Feature Engineering aplicado")
-        print(f"      Nuevas columnas train: {X_train.shape[1]}")
+        print(f"      Train shape: {X_train.shape} | Test shape: {X_test.shape}")
+
+        # Distribución de clases
+        dist_train = y_train.value_counts(normalize=True).round(4).to_dict()
+        dist_test  = y_test.value_counts(normalize=True).round(4).to_dict()
+        print("      Distribución clases (proporción)")
+        print(f"      - Train: {dist_train}")
+        print(f"      - Test : {dist_test}")
+
+        if split_type == "temporal":
+            print(f"      Train max fecha_prestamo: {X_train['fecha_prestamo'].max()}")
+            print(f"      Test  min fecha_prestamo: {X_test['fecha_prestamo'].min()}")
+
 
     # Asegurar alineación (por si algo tocó índices)
     X_train, y_train = X_train.align(y_train, axis=0, join="inner")
@@ -549,13 +497,14 @@ def run_feature_pipeline(
     assert target not in X_train.columns
     assert target not in X_test.columns
 
-    # Pipeline preprocess (fit SOLO en train)
+    # 5) Pipeline preprocess (fit SOLO en train)
     pipe = build_data_pipeline(drop_cols=drop_cols)
 
     if verbose:
-        print("\n[5/7] Fitteando preprocesador SOLO en train...")
+        print("\n[5/7] Fit del pipeline SOLO en train (evita leakage)")
+        print("      Pipeline: FE (FunctionTransformer) + CAP (QuantileCapper) + Preprocess (ColumnTransformer)")
 
-    X_train_arr = pipe.fit_transform(X_train)
+    X_train_arr = pipe.fit_transform(X_train, y_train)
     X_test_arr  = pipe.transform(X_test)
 
     # Feature names
@@ -563,14 +512,21 @@ def run_feature_pipeline(
         feature_names = pipe.named_steps["pre"].get_feature_names_out()
     except Exception:
         feature_names = np.array([f"feature_{i}" for i in range(X_train_arr.shape[1])])
+
     
     if verbose:
         print("\n[6/7] Transformación completada")
         print(f"      Features finales: {len(feature_names)}")
 
-    # RangeIndex para evitar líos por DatetimeIndex
+    # 6) Dataframes finales
     X_train_p = pd.DataFrame(X_train_arr, columns=feature_names).reset_index(drop=True)
     X_test_p  = pd.DataFrame(X_test_arr,  columns=feature_names).reset_index(drop=True)
+
+    if verbose:
+        print("\n[6/7] Transformación completada")
+        print(f"      Features finales: {len(feature_names)}")
+        print(f"      X_train_p: {X_train_p.shape} | X_test_p: {X_test_p.shape}")
+
 
     # y también lo reseteamos para mantener consistencia
     y_train = y_train.reset_index(drop=True)
@@ -580,7 +536,6 @@ def run_feature_pipeline(
         "pipeline": pipe,
         "preprocessor": pipe.named_steps["pre"],
         "feature_names": list(feature_names),
-        "quality_report": quality_report,
         "split_config": {
             "test_size": test_size,
             "split_type": split_type,
@@ -591,13 +546,17 @@ def run_feature_pipeline(
         "class_balance_test": y_test.value_counts(normalize=True).to_dict(),
         "zeros_train": int((y_train == 0).sum()),
         "zeros_test": int((y_test == 0).sum()),
+        # trazabilidad del cutoff
+        "cutoff_date": "2026-02-14",
+        "rows_after_cutoff_filter": int(len(df)),
     }
 
     if verbose:
-        print(f"OK: X_train_p = {X_train_p.shape}")
-        print(f"OK: X_test_p  = {X_test_p.shape}")
-        print(f"OK: total_features_out = {len(feature_names)}")
-        print("=" * 60)
+        print("\n[7/7] Artefactos generados")
+        print("      - pipeline (fe + cap + preprocessor)")
+        print("      - feature_names")
+        print("      - split_config + balance de clases")
+        print("\n" + "=" * 60)
         print("PIPELINE COMPLETADO")
         print("=" * 60)
 
@@ -606,19 +565,24 @@ def run_feature_pipeline(
 
 if __name__ == "__main__":
     warnings.filterwarnings('ignore')
-    X_train_p, X_test_p, y_train, y_test, artifacts = run_feature_pipeline(
+
+    X_train_p, X_test_p, y_train, y_test, artifacts = ft_pipeline(
         target="pago_atiempo",
         test_size=0.2,
-        split_type="random",
+        split_type="temporal",
         random_state=42,
         stratify=True,
-        drop_cols= ['puntaje'],
-        run_quality=False,
+        drop_cols= [],
         verbose=True
     )
     
-    print("\nListo ")
+    print("\n" + "=" * 60)
+    print("EJECUCIÓN LOCAL OK")
+    print("=" * 60)
     print("X_train_p:", X_train_p.shape)
     print("X_test_p :", X_test_p.shape)
     print("Balance train:", artifacts["class_balance_train"])
     print("Balance test :", artifacts["class_balance_test"])
+    print("Total features out:", len(artifacts["feature_names"]))
+    print("Cutoff usado:", artifacts["cutoff_date"])
+    print("Filas luego del filtro:", artifacts["rows_after_cutoff_filter"])
