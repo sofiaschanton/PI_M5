@@ -15,9 +15,10 @@ ipykernel
 ipywidgets
 
 
+
 # Machine Learning
 scikit-learn == 1.4.2
-xgboost == 3.2.0
+xgboost == 2.1.4
 catboost == 1.2.8
 lightgbm == 4.6.0
 optuna == 4.7.0
