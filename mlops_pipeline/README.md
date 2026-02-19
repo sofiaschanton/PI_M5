@@ -104,22 +104,18 @@ Funciones principales:
 
 Script completo de entrenamiento, validación, selección y persistencia.
 
-Modelos evaluados: Logistic Regression (class_weight="balanced"), Random Forest, XGBoost, LightGBM y CatBoost
+- Modelos evaluados: Logistic Regression (class_weight="balanced"), Random Forest, XGBoost, LightGBM y CatBoost
 
-Validación: TimeSeriesSplit (5 folds) y métricas orientadas a desbalance: ROC-AUC, PR-AUC, Balanced Accuracy, F1, PR-AUC clase 0.
+- Validación: TimeSeriesSplit (5 folds) y métricas orientadas a desbalance: ROC-AUC, PR-AUC, Balanced Accuracy, F1, PR-AUC clase 0.
 
-Selección del modelo: criterio robusto: cv_pr_auc_0_mean - cv_pr_auc_0_std
+- Selección del modelo: criterio robusto: cv_pr_auc_0_mean - cv_pr_auc_0_std
+  - Mejor modelo:✅ Logistic Regression
 
-Mejor modelo:✅ Logistic Regression
+- Se optimiza el threshold maximizando F1 clase 0 mediante predicciones OOF.
+  - Threshold óptimo: 0.5351, F1 clase 0 (train): 0.1404
 
-
-Se optimiza el threshold maximizando F1 clase 0 mediante predicciones OOF.
-
-Threshold óptimo: 0.5351, F1 clase 0 (train): 0.1404
-
-Resultados en Test
-
-Confusion Matrix:
+- Resultados en Test
+  - Confusion Matrix:
 
 [[  27   32]
  [ 656 1386]]
