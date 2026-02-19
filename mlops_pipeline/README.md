@@ -72,7 +72,7 @@ Implicancias para el modelado
 - Tratar outliers.
 - Evaluar impacto de variables altamente correlacionadas.
 
-#### Feature Engineering (ft_engineering.py)
+### Feature Engineering (ft_engineering.py)
 
 Módulo central que encapsula el preprocesamiento evitando data leakage.
 
@@ -100,7 +100,7 @@ Funciones principales:
 - y_train, y_test
 - artifacts (pipeline, feature_names, config del split, balance de clases, cutoff)
 
-#### Entrenamiento y Evaluación (model_training_evaluation.py)
+### Entrenamiento y Evaluación (model_training_evaluation.py)
 
 Script completo de entrenamiento, validación, selección y persistencia.
 
@@ -128,7 +128,7 @@ Se prioriza un modelo lineal regularizado debido a su alta trazabilidad, interpr
 
 Los resultados obtenidos reflejan la dificultad inherente de modelar la clase minoritaria en un contexto de fuerte desbalance estructural. Esto pone de manifiesto la necesidad de incorporar técnicas avanzadas de tratamiento del desbalance —como reweighting, resampling o estrategias de optimización específicas por clase— con el objetivo de mejorar la capacidad de detección de eventos poco frecuentes sin comprometer la estabilidad global del modelo.
 
-#### Data Drift Monitoring Dashboard (model_monitoring.py)
+### Data Drift Monitoring Dashboard (model_monitoring.py)
 
 Se desarrolló un dashboard interactivo en Streamlit para monitorear data drift del modelo de clasificación, comparando un conjunto de referencia (histórico) contra uno nuevo (reciente) mediante un split temporal sobre fecha_prestamo. El objetivo es detectar cambios en la distribución de las variables que puedan degradar el comportamiento del modelo en producción.
 
@@ -149,10 +149,10 @@ Métricas y tests aplicados por tipo de variable:
   - Se reporta categoría top (moda), proporción y delta entre períodos
 
 - Sistema de alertas (“semáforo”)
-🔴 Drift crítico: presencia de PSI/JSD crítico en varias variables
-🟠 Drift moderado: drift estadístico relevante o múltiples warnings
-🟡 cambios leves: drift estadístico sin magnitud relevante
-🟢 estable: sin alertas relevantes
+  - 🔴 Drift crítico: presencia de PSI/JSD crítico en varias variables
+  - 🟠 Drift moderado: drift estadístico relevante o múltiples warnings
+  - 🟡 cambios leves: drift estadístico sin magnitud relevante
+  - 🟢 estable: sin alertas relevantes
 
 Visualizaciones incluidas
 - Heatmap Top 10 de intensidad de drift (PSI/KS/JSD escaladas a 0–1)
@@ -166,7 +166,7 @@ Salida / uso práctico
 (Nota: el dashboard incluye además una pestaña “Predicción” para consumir la API /predict por batch, pero el foco principal del script es el monitoreo de DATA DRIFT, no performance del modelo.)
 
 
-#### FastAPI Model Deployment (model_deploy.py )
+### FastAPI Model Deployment (model_deploy.py )
 
 Se implementó una API REST con FastAPI para disponibilizar el modelo entrenado y permitir predicciones por lote (batch) a partir de datos crudos (RAW). La API carga un pipeline end-to-end guardado en artifacts/ que incluye preprocesamiento + modelo, por lo que recibe registros con el mismo esquema del dataset original y devuelve la predicción final.
 
@@ -189,7 +189,7 @@ artifacts/models/logistic_regression_end_to_end_pipeline.joblib
 Ejecución
 - Se levanta con Uvicorn en 0.0.0.0:5040: uvicorn model_deploy:app --reload --host 0.0.0.0 --port 5040
 
-#### Dockerfile (Containerización de la API)
+### Dockerfile (Containerización de la API)
 
 Se creó un Dockerfile que:
 - Usa python:3.10-slim
@@ -229,7 +229,7 @@ Como se utiliza FastAPI, la documentación interactiva puede consultarse en:
 
 http://localhost:5050/docs
 
-#### Arquitectura del sistema
+### Arquitectura del sistema
 
 ```mermaid
 flowchart TD
@@ -252,17 +252,17 @@ flowchart TD
     G --> H
 ```
 
-#### Enfoque MLOps aplicado
+### Enfoque MLOps aplicado
 
 El proyecto incorpora prácticas fundamentales de MLOps orientadas a reproducibilidad, trazabilidad y despliegue en entorno productivo.
 
-**Pipeline reproducible:**
+#### **Pipeline reproducible:**
 
 Se implementó un pipeline modular en ft_engineering.py que integra:
 - Feature Engineering: Tratamiento de outliers (capping por cuantiles aprendidos en train)
 - Preprocesamiento por tipo de variable: El pipeline se ajusta únicamente sobre el conjunto de entrenamiento y luego se reutiliza para transformación en test y producción, evitando data leakage y garantizando consistencia entre entornos.
 
-**Separación entrenamiento / inferencia**
+#### **Separación entrenamiento / inferencia**
 
 Se diferenciaron claramente los componentes:
 - model_training_evaluation.py: entrenamiento, validación, selección y guardado del modelo.
@@ -270,7 +270,7 @@ Se diferenciaron claramente los componentes:
 
 El modelo productivo utiliza un pipeline end-to-end (RAW → predicción) previamente persistido, lo que asegura que las transformaciones aplicadas en producción sean idénticas a las utilizadas en entrenamiento.
 
-**Persistencia de artefactos**
+#### **Persistencia de artefactos**
 
 Se guardan de forma estructurada en /artifacts/:
 - ft_pipeline.joblib (feature engineering + preprocessing)
@@ -278,7 +278,7 @@ Se guardan de forma estructurada en /artifacts/:
 - Pipeline completo (<model>_end_to_end_pipeline.joblib)
 - Esto permite reutilización, versionado y desacoplamiento entre entrenamiento y despliegue.
 
-**Metadata de corrida**
+#### **Metadata de corrida**
 
 Cada entrenamiento genera un archivo JSON con:
 - Target utilizado
@@ -289,13 +289,13 @@ Cada entrenamiento genera un archivo JSON con:
 - Información de tuning (si aplica)
 - Esto mejora la trazabilidad y facilita auditoría o comparación entre experimentos.
 
-**Monitoreo de Data Drift**
+#### **Monitoreo de Data Drift**
 
 Se desarrolló un dashboard en Streamlit que evalúa drift en datos RAW y espacio PRE (post-transformación del modelo).
 - Se aplican métricas estadísticas (KS, Chi-square) y métricas de magnitud (PSI, JSD), con sistema de alertas configurable.
 - Esto permite detectar desviaciones en la distribución de variables que podrían afectar la estabilidad del modelo en producción.
 
-**API productiva**
+#### **API productiva**
 
 Se implementó una API REST con FastAPI que:
 - Carga el modelo entrenado
@@ -304,7 +304,7 @@ Se implementó una API REST con FastAPI que:
 - Permite configurar threshold
 - Esto facilita integración con sistemas externos.
 
-**Dockerización**
+#### **Dockerización**
 
 Se creó un Dockerfile que incluye:
 - Código fuente
