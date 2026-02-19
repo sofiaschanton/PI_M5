@@ -132,8 +132,7 @@ def best_threshold_f1_class0(y_true, y_score_class1, n=300):
         if f1_0 > best_f1:
             best_f1, best_t = f1_0, t
 
-    return best_t, best_f1
-
+    return float(best_t), float(best_f1)
 #-----------------------------------------------------
 # 1) Definir candidatos a modelos
 #-----------------------------------------------------
@@ -212,6 +211,7 @@ def tune_best_model_with_optuna(best_name, X_train, y_train, cv_folds,
     scorers = {
         "roc_auc": "roc_auc",
         "pr_auc": "average_precision",
+        "pr_auc_0": pr_auc_0_scorer,
         "f1": "f1",
         "recall": "recall",
         "precision": "precision",
@@ -315,6 +315,7 @@ def summarize_classification(y_true, y_pred, y_score=None):
     if y_score is not None:
         metrics["roc_auc"] = roc_auc_score(y_true, y_score)
         metrics["pr_auc"] = average_precision_score(y_true, y_score)
+        metrics["pr_auc_0"] = pr_auc_class_0(y_true, y_score)
 
     return metrics
 
@@ -395,10 +396,10 @@ def train_and_select_model( X_train, y_train, X_test, y_test,random_state):
 
         print(
         f"{name:>18} | "
-        f"CV ROC-AUC: {result['cv_roc_auc_mean']:.4f} "
-        f"(±{result['cv_roc_auc_std']:.4f}) | "
         f"CV PR-AUC Class 0: {result['cv_pr_auc_0_mean']:.4f} "
         f"(±{result['cv_pr_auc_0_std']:.4f}) | "
+        f"CV ROC-AUC: {result['cv_roc_auc_mean']:.4f} "
+        f"(±{result['cv_roc_auc_std']:.4f}) | "
         f"Train: {train_time:.2f}s  | "
         f"Predict: {pred_time:.2f}s"
 )
@@ -407,12 +408,12 @@ def train_and_select_model( X_train, y_train, X_test, y_test,random_state):
     # 4) Selección robusta (mean - std)
     # -------------------------
 
-    # Mejor por ROC-AUC
-    best = max(results, key=lambda x: x["cv_roc_auc_mean"] - x["cv_roc_auc_std"])
+    # Mejor por PR-AUC Class0
+    best = max(results, key=lambda x: x["cv_pr_auc_0_mean"] - x["cv_pr_auc_0_std"])
 
-    print(f"\n✅ Mejor modelo final (ROC ): {best['name']}")
-    print(f"{best['cv_roc_auc_mean']:.4f} (±{best['cv_roc_auc_std']:.4f})")
-    
+    print(f"\n✅ Mejor modelo final (PR-AUC clase 0): {best['name']}")
+    print(f"{best['cv_pr_auc_0_mean']:.4f} (±{best['cv_pr_auc_0_std']:.4f})")
+
     best_model = best["model"]
 
     #Reentrenar con todo el train
