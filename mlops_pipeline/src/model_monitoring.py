@@ -33,7 +33,7 @@ from ft_engineering import (
 #----------------------------------------------
 # 1. Configuración de la página de Streamlit
 #----------------------------------------------
-st.set_page_config(page_title="Monitoreo de Data Drift", layout="wide")
+st.set_page_config(page_title="Monitoreo y predicción de un modelo de ML", layout="wide")
 
 DATE_COL = "fecha_prestamo"
 TARGET = "pago_atiempo"
@@ -655,7 +655,7 @@ if DATE_COL in X_ref.columns and DATE_COL in X_new.columns:
     except Exception:
         pass
 
-tab_raw, tab_pre, tab_resumen, tab_predict = st.tabs(["🔍 Datos Crudos (Raw)","Datos Preprocesados","✅ Resumen Final", "Predicción"])
+tab_raw, tab_pre, tab_resumen, tab_predict = st.tabs([" Data drift: datos Crudos (Raw)","Data drift: datos reprocesados","✅ Resumen Final de data drift", "Predicción"])
 
 # --- TAB RAW ---
 with tab_raw:
